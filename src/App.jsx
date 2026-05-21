@@ -4236,6 +4236,9 @@ function NotifPanel({ notifs, onClear, onClose }) {
 /* ═══════════════════════════════════════════════════════════════════
    AUTH
 ═══════════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════
+   AUTH PAGE — Supabase only, no hardcoded accounts
+═══════════════════════════════════════════════════════════════════ */
 function AuthPage({ onAuth }) {
   const [mode, setMode] = useState("login");
   const [f, setF]       = useState({ username: "", email: "", password: "", confirm: "", role: "player" });
@@ -4243,44 +4246,81 @@ function AuthPage({ onAuth }) {
   const [loading, setLoading] = useState(false);
   const h = k => e => setF(p => ({ ...p, [k]: e.target.value }));
 
-  const submit = () => {
+  const getSupabase = async () => {
+    const { createClient } = await import("@supabase/supabase-js");
+    return createClient(
+      "https://yfrtywzyjlkeldukzxxj.supabase.co",
+      "sb_publishable_NDlHt0p6LjORkBHMO1nh5g_zvxq7GVc"
+    );
+  };
+
+  const buildUserObj = (authUser, profile) => ({
+    id:        authUser.id,
+    email:     authUser.email,
+    username:  profile?.username  || authUser.email.split("@")[0],
+    role:      profile?.role      || "player",
+    plan:      profile?.plan      || "free",
+    bio:       profile?.bio       || "",
+    createdAt: authUser.created_at,
+  });
+
+  const submit = async () => {
     setErr("");
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      const users = LS.get("gder_users", []);
+    try {
+      const supabase = await getSupabase();
       if (mode === "register") {
-        if (!f.username.trim() || !f.email.trim() || !f.password) return setErr("Please fill all fields.");
-        if (f.password.length < 6) return setErr("Password must be at least 6 characters.");
-        if (f.password !== f.confirm) return setErr("Passwords don't match.");
-        if (users.find(u => u.email === f.email.toLowerCase())) return setErr("Email already registered.");
-        if (users.find(u => u.username.toLowerCase() === f.username.toLowerCase())) return setErr("Username already taken.");
-        const u = { id: Date.now(), username: f.username.trim(), email: f.email.toLowerCase().trim(), password: f.password, role: f.role, bio: "", plan: "free", planExpiry: null, createdAt: new Date().toISOString() };
-        LS.set("gder_users", [...users, u]);
-        LS.set("gder_user", u);
-        onAuth(u);
+        if (!f.username.trim() || !f.email.trim() || !f.password)
+          return setErr("Please fill all fields.");
+        if (f.password.length < 6)
+          return setErr("Password must be at least 6 characters.");
+        if (f.password !== f.confirm)
+          return setErr("Passwords don't match.");
+
+        const { data, error } = await supabase.auth.signUp({
+          email: f.email.trim().toLowerCase(),
+          password: f.password,
+          options: { data: { username: f.username.trim(), role: f.role } }
+        });
+        if (error) return setErr(error.message);
+
+        // Wait for DB trigger to create profile
+        await new Promise(r => setTimeout(r, 900));
+        const { data: profile } = await supabase
+          .from("profiles").select("*").eq("id", data.user.id).single();
+        const userObj = buildUserObj(data.user, profile);
+        LS.set("gder_user", userObj);
+        onAuth(userObj);
+
       } else {
-        // nvidia26 admin account
-        if (f.email === "nvidia26@outlook.fr" && f.password === "Drgonn55g55Ranaroge") {
-          const adm = users.find(u => u.email === "nvidia26@outlook.fr") || { id: "superadmin", username: "Admin", email: "nvidia26@outlook.fr", password: "Drgonn55g55Ranaroge", role: "admin", bio: "93NPC platform administrator", createdAt: new Date().toISOString() };
-          if (!users.find(u => u.email === "nvidia26@outlook.fr")) LS.set("gder_users", [...users, adm]);
-          LS.set("gder_user", adm);
-          return onAuth(adm);
-        }
-        const u = users.find(x => x.email === f.email.toLowerCase() && x.password === f.password);
-        if (!u) return setErr("Invalid email or password.");
-        LS.set("gder_user", u);
-        onAuth(u);
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email:    f.email.trim().toLowerCase(),
+          password: f.password,
+        });
+        if (error) return setErr("Invalid email or password.");
+
+        const { data: profile } = await supabase
+          .from("profiles").select("*").eq("id", data.user.id).single();
+        const userObj = buildUserObj(data.user, profile);
+        LS.set("gder_user", userObj);
+        onAuth(userObj);
       }
-    }, 400);
+    } catch (e) {
+      setErr("Network error — please try again.");
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
   };
+
+  const AUTH_LOGO_B64 = "data:image/png;base64,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";
 
   return (
     <div className="auth-wrap" style={{background:"linear-gradient(135deg,#E8ECF0,#EEF1F5,#E4EBF5)",color:"#2D3436"}}>
       <div className="auth-card">
         <div className="auth-logo">
           <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:10, marginBottom:4 }}>
-            <img src="data:image/png;base64,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" alt="93NPC" style={{ width:110, height:110, objectFit:"contain" }}/>
+            <img src={AUTH_LOGO_B64} alt="93NPC" style={{ width:90, height:90, objectFit:"contain" }}/>
             <div style={{ fontFamily:"var(--fd)", fontSize:26, fontWeight:900, letterSpacing:4, color:"var(--txt)" }}>93NPC</div>
           </div>
         </div>
@@ -4321,11 +4361,10 @@ function AuthPage({ onAuth }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
-   APP ROOT
+   APP ROOT — Supabase session management
 ═══════════════════════════════════════════════════════════════════ */
 export default function App() {
 
-  // ── Neumorphic theme injection (guaranteed fresh render) ──
   useEffect(() => {
     const id = 'gder-styles';
     let el = document.getElementById(id);
@@ -4333,27 +4372,98 @@ export default function App() {
     el.textContent = GDER_CSS;
   }, []);
 
-  const [user,    setUser]    = useState(() => LS.get("gder_user", null));
-  const [page,    setPage]    = useState("home");
-  const [games,   setGames]   = useState(() => LS.get("gder_games", []));
-  const [favs,    setFavs]    = useState(() => LS.get("gder_favs",  []));
-  const [played,  setPlayed]  = useState(() => LS.get("gder_played",[]));
-  const [groups,  setGroups]  = useState(() => LS.get("gder_groups",[]));
-  const [joined,  setJoined]  = useState(() => LS.get("gder_joined",[]));
-  const [users,   setUsers]   = useState(() => LS.get("gder_users", []));
-  const [sbOpen,  setSbOpen]  = useState(false);
-  const [sbMini,  setSbMini]  = useState(() => LS.get("gder_mini", false));
-  const [selGame, setSelGame] = useState(null);
-  const [toast,   setToast]   = useState(null);
-  const [search,  setSearch]  = useState("");
-  const [showSearch, setShowSearch] = useState(false);
-  const [showNotifs, setShowNotifs] = useState(false);
-  const [notifs,  setNotifs]  = useState([]);
+  const [user,        setUser]        = useState(() => LS.get("gder_user", null));
+  const [authLoading, setAuthLoading] = useState(true);
+  const [page,        setPage]        = useState("home");
+  const [games,       setGames]       = useState(() => LS.get("gder_games", []));
+  const [favs,        setFavs]        = useState(() => LS.get("gder_favs",  []));
+  const [played,      setPlayed]      = useState(() => LS.get("gder_played",[]));
+  const [groups,      setGroups]      = useState(() => LS.get("gder_groups",[]));
+  const [joined,      setJoined]      = useState(() => LS.get("gder_joined",[]));
+  const [users,       setUsers]       = useState(() => LS.get("gder_users", []));
+  const [sbOpen,      setSbOpen]      = useState(false);
+  const [sbMini,      setSbMini]      = useState(() => LS.get("gder_mini", false));
+  const [selGame,     setSelGame]     = useState(null);
+  const [toast,       setToast]       = useState(null);
+  const [search,      setSearch]      = useState("");
+  const [showSearch,  setShowSearch]  = useState(false);
+  const [showNotifs,  setShowNotifs]  = useState(false);
+  const [notifs,      setNotifs]      = useState([]);
   const toastTimer = useRef(null);
   const searchRef  = useRef(null);
 
-  // Sync users from storage on games change (for admin panel)
-  useEffect(() => { setUsers(LS.get("gder_users", [])); }, []);
+  // ── Supabase: restore session on mount + listen for auth events ──
+  useEffect(() => {
+    let subscription;
+    (async () => {
+      try {
+        const { createClient } = await import("@supabase/supabase-js");
+        const supabase = createClient(
+          "https://yfrtywzyjlkeldukzxxj.supabase.co",
+          "sb_publishable_NDlHt0p6LjORkBHMO1nh5g_zvxq7GVc"
+        );
+
+        // Build normalized user object from Supabase auth + profiles table
+        const fetchUser = async (authUser) => {
+          const { data: profile } = await supabase
+            .from("profiles").select("*").eq("id", authUser.id).single();
+          return {
+            id:        authUser.id,
+            email:     authUser.email,
+            username:  profile?.username  || authUser.email.split("@")[0],
+            role:      profile?.role      || "player",   // ← from profiles.role in DB
+            plan:      profile?.plan      || "free",
+            bio:       profile?.bio       || "",
+            createdAt: authUser.created_at,
+          };
+        };
+
+        // Restore session after page refresh
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          const userObj = await fetchUser(session.user);
+          setUser(userObj);
+          LS.set("gder_user", userObj);
+          // Preload all profiles for admin panel
+          const { data: allProfiles } = await supabase.from("profiles").select("*");
+          if (allProfiles) { setUsers(allProfiles); LS.set("gder_users", allProfiles); }
+        } else {
+          LS.del("gder_user");
+          setUser(null);
+        }
+
+        // Real-time auth state listener
+        const { data: { subscription: sub } } = supabase.auth.onAuthStateChange(
+          async (event, session) => {
+            if (event === "SIGNED_OUT") {
+              LS.del("gder_user");
+              setUser(null);
+              setFavs([]);
+              setPlayed([]);
+              setJoined([]);
+            }
+            if ((event === "SIGNED_IN" || event === "TOKEN_REFRESHED") && session?.user) {
+              const userObj = await fetchUser(session.user);
+              setUser(userObj);
+              LS.set("gder_user", userObj);
+            }
+          }
+        );
+        subscription = sub;
+      } catch (e) {
+        // Supabase unavailable (offline / blocked) — keep cached localStorage session
+        console.warn("Supabase session check failed:", e.message);
+      } finally {
+        setAuthLoading(false);
+      }
+    })();
+    return () => { if (subscription) subscription.unsubscribe(); };
+  }, []);
+
+  // Reload users list when current user changes (needed for admin panel)
+  useEffect(() => {
+    if (user) setUsers(LS.get("gder_users", []));
+  }, [user]);
 
   const showToast = useCallback((msg, isErr = false) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -4369,9 +4479,22 @@ export default function App() {
     showToast(has ? "Removed from favorites" : "Added to favorites!");
   }, [favs, showToast]);
 
-  const go = useCallback(p => { setPage(p); setSbOpen(false); setShowSearch(false); setShowNotifs(false); }, []);
+  const go = useCallback(p => {
+    setPage(p);
+    setSbOpen(false);
+    setShowSearch(false);
+    setShowNotifs(false);
+  }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try {
+      const { createClient } = await import("@supabase/supabase-js");
+      const supabase = createClient(
+        "https://yfrtywzyjlkeldukzxxj.supabase.co",
+        "sb_publishable_NDlHt0p6LjORkBHMO1nh5g_zvxq7GVc"
+      );
+      await supabase.auth.signOut();
+    } catch (e) { /* Supabase unavailable — continue anyway */ }
     LS.del("gder_user");
     setUser(null);
     setPage("home");
@@ -4380,23 +4503,30 @@ export default function App() {
     setJoined([]);
   }, []);
 
-  const toggleSbMini = () => { const next = !sbMini; setSbMini(next); LS.set("gder_mini", next); };
+  const toggleSbMini = () => {
+    const next = !sbMini;
+    setSbMini(next);
+    LS.set("gder_mini", next);
+  };
 
-  // Close dropdowns on outside click
   useEffect(() => {
     const h = e => {
-      if (!e.target.closest(".hdr-search") && !e.target.closest(".search-drop")) setShowSearch(false);
-      if (!e.target.closest(".hdr-ico") && !e.target.closest(".notif-panel")) setShowNotifs(false);
+      if (!e.target.closest(".hdr-search") && !e.target.closest(".search-drop"))
+        setShowSearch(false);
+      if (!e.target.closest(".hdr-ico") && !e.target.closest(".notif-panel"))
+        setShowNotifs(false);
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, []);
 
   const addNotif = useCallback(msg => {
-    setNotifs(p => [{ msg, time: new Date().toLocaleTimeString("en",{hour:"2-digit",minute:"2-digit"}) }, ...p.slice(0, 9)]);
+    setNotifs(p => [{
+      msg,
+      time: new Date().toLocaleTimeString("en", { hour:"2-digit", minute:"2-digit" })
+    }, ...p.slice(0, 9)]);
   }, []);
 
-  // Watch for new approved games to notify
   const prevApproved = useRef(games.filter(g => g.approvalStatus === "approved").length);
   useEffect(() => {
     const now = games.filter(g => g.approvalStatus === "approved").length;
@@ -4404,12 +4534,33 @@ export default function App() {
     prevApproved.current = now;
   }, [games, addNotif]);
 
-  if (!user) return (
-    <>
-      <AuthPage onAuth={u => { setUser(u); setUsers(LS.get("gder_users", [])); }}/>
-    </>
+  // ── Loading spinner while Supabase checks session ──
+  if (authLoading) return (
+    <div style={{
+      width:"100vw", height:"100vh", display:"flex", alignItems:"center",
+      justifyContent:"center", background:"#E8ECF0", flexDirection:"column", gap:16
+    }}>
+      <div style={{
+        width:48, height:48, border:"4px solid #FF4D6D",
+        borderTopColor:"transparent", borderRadius:"50%",
+        animation:"spin 0.8s linear infinite"
+      }}/>
+      <div style={{ fontFamily:"system-ui,sans-serif", fontSize:14, color:"#636E72", fontWeight:600 }}>
+        93NPC
+      </div>
+      <style>{"@keyframes spin{to{transform:rotate(360deg)}}"}</style>
+    </div>
   );
 
+  // ── Auth wall ──
+  if (!user) return (
+    <AuthPage onAuth={u => {
+      setUser(u);
+      setUsers(LS.get("gder_users", []));
+    }}/>
+  );
+
+  // ── Navigation — role sourced exclusively from Supabase profiles table ──
   const NAV = [
     { id:"home",      label:"Home",     icon:"home"   },
     { id:"forum",     label:"Forum",    icon:"globe"  },
@@ -4418,10 +4569,21 @@ export default function App() {
     { id:"library",   label:"Library",  icon:"book"   },
     { id:"groups",    label:"Groups",   icon:"users"  },
     { id:"profile",   label:"Profile",  icon:"user"   },
-    ...(user.role === "creator" ? [{ id:"creator", label:"Studio", icon:"zap" }] : []),
-    ...(["admin","moderator"].includes(user.role) ? [{ id:"admin", label: user.role==="admin" ? "Admin" : "Modération", icon:"shield"}] : []),
+    // Studio tab: role === creator OR creator_plus plan
+    ...(user.role === "creator" || isCreatorPlus(user)
+      ? [{ id:"creator", label:"Studio", icon:"zap" }]
+      : []),
+    // Admin tab: ONLY role === "admin" (set via SQL UPDATE profiles SET role='admin')
+    ...(user.role === "admin"
+      ? [{ id:"admin", label:"Admin", icon:"shield" }]
+      : []),
+    // Moderator tab: ONLY role === "moderator"
+    ...(user.role === "moderator"
+      ? [{ id:"admin", label:"Modération", icon:"shield" }]
+      : []),
     { id:"settings",  label:"Settings", icon:"cog"    },
   ];
+
   const BOT = [
     { id:"home",      l:"Home",   i:"home"  },
     { id:"all-games", l:"Games",  i:"grid"  },
